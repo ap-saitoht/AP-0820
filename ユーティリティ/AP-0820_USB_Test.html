@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AP-0820 USB TEST</title>
+<script>
+//Webサーバーから Web Serial API を使用する場合には https での接続が必要です。
+let port, reader;
+let openFlag = false;
+let timeoutFlag;
+
+//Web Serial API サポート可否確認
+if ("serial" in navigator) {
+  addStatus("The Web Serial API is supported.");
+}
+
+//ペアリング済みデバイスが追加された際のイベント
+navigator.serial.addEventListener('connect', e => {
+  addStatus("Cable is connected.\n");
+});
+
+//ペアリング済みデバイスが削除された際のイベント
+navigator.serial.addEventListener('disconnect', e => {
+  addStatus("Cable is disconnected.\n");
+});
+
+//ペアリング済みのシリアルデバイスから取得
+async function getDevice() {
+    let ports = await navigator.serial.getPorts();  //ペアリング済みデバイスの一覧取得
+    //const filter = { usbVendorId: 0x1A86 };  //USBベンダーIDを指定 Arduino Nano
+    //ports = await navigator.serial.getPort({ filters: [filter] });  //フィルタして
+    if (ports.length > 0) {
+        addStatus("Paired Serial Devices:" + ports.length + "\n");
+        return ports[0];  //最初のデバイスを取得
+    } else {
+        return await navigator.serial.requestPort();  //デバイスがなければ選択
+    }
+};
+
+//SJISエンコード
+const table = { '\u00a5': 0x5c, '\u203e': 0x7e, '\u301c': 0x8160 };
+const decoder = new TextDecoder('shift-jis');
+for (let i = 0x81; i <= 0xfc; i++) {
+    if (i <= 0x84 || i >= 0x87 && i <= 0x9f || i >= 0xe0 && i <= 0xea || i >= 0xed && i <= 0xee || i >= 0xfa) {
+        for (let j = 0x40; j <= 0xfc; j++) {
+            const c = decoder.decode(new Uint8Array([i, j]));
+            if (c.length === 1 && c !== '\ufffd' && !table[c]) {
+                table[c] = i << 8 | j;
+            }
+        }
+    }
+}
+
+function sjisEncode(content) {
+    let buffer = [];
+    for (let i = 0; i < content.length; i++) {
+        const c = content.codePointAt(i);
+        if (c > 0xffff) i++;
+        if (c < 0x80) {
+            buffer.push(c);
+        } else if (c >= 0xff61 && c <= 0xff9f) {
+            buffer.push(c - 0xfec0);
+        } else {
+            const d = table[String.fromCodePoint(c)] || 0x3f;
+            if (d > 0xff) {
+                buffer.push(d >> 8 & 0xff, d & 0xff);
+            } else {
+                buffer.push(d);
+            }
+        }
+    }
+    return Uint8Array.from(buffer);
+};
+
+//シリアル受信
+async function recvSerial() {
+    while (port.readable) {
+        //シリアル受信
+        reader = port.readable.getReader();  //リーダの取得・ロック
+        let receivedBytes = new Uint8Array(0);  //受信バッファ
+        try {
+            while (true) {
+                //タイムアウト設定
+                var timeout = Number(document.getElementById('timeoutSelect').value);
+                timeoutFlag = false;
+                if(timeout > 0) {
+                    var timeoutId = setTimeout(() => {
+                        timeoutFlag = true;
+                        reader.releaseLock();
+                    }, timeout);
+                }
+                const { value, done } = await reader.read();  //データ受信
+                if(timeout > 0) clearTimeout(timeoutId);
+                if(done) break;  //ポートが閉じられたか、データの受信が停止
+                if(timeout == 0) {
+                    const decoder = new TextDecoder(document.getElementById('encodeSelect').value);
+                    const str = decoder.decode(value);
+                    addRecive(str);
+                    addStatus("Recv: " + createHexString(value) + "\n");
+                } else {
+                    // 受信データを連結
+                    const tempBuffer = new Uint8Array(receivedBytes.length + value.length);
+                    tempBuffer.set(receivedBytes);
+                    tempBuffer.set(value, receivedBytes.length);
+                    receivedBytes = tempBuffer;
+                }
+            }
+            reader.releaseLock();  //リーダの解放
+        } catch (e) {
+            if(timeoutFlag) {
+                if(receivedBytes.length > 0) {
+                    const decoder = new TextDecoder(document.getElementById('encodeSelect').value);
+                    const str = decoder.decode(receivedBytes);
+                    addRecive(str);
+                    addStatus("Recv: " + createHexString(receivedBytes) + "\n");
+                }
+            } else {
+                if(timeout > 0) clearTimeout(timeoutId);
+                addStatus(e + "\n");
+            }
+        }
+        if(!openFlag) break;
+    }
+}
+
+//ボタン押下 ポートオープン
+async function openButtonClick() {
+    if (openFlag) return; 
+
+    //シリアルポート選択
+    try {
+        port = await navigator.serial.requestPort();  //シリアルデバイス選択
+        //const filter = { usbVendorId: 0x1A86 };  //USBベンダーIDを指定 Arduino Nano
+        //port = await navigator.serial.requestPort({ filters: [filter] });  //フィルタしてシリアルデバイス選択
+        //port = await getDevice();  //ペアリング済みのシリアルデバイスから取得
+    } catch (e) {
+        addStatus(e + "\n");
+        return;
+    }
+
+    //シリアルポートオープン
+    try {
+        await port.open({ baudRate: 38400, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none", bufferSize: 255 });
+        addStatus("Open Serial port.\n");
+    } catch (e) {
+        addStatus(e + "\n");
+        return;
+    }
+    openFlag = true;
+
+    //信号線on/off
+    port.setSignals({ dataTerminalReady: true });  //DTRをON
+    port.setSignals({ requestToSend: true });  //RTSをON
+    //port.setSignals({ break: false });  //BreakをOFF
+    //if(port.getSignals.dataCarrierDetect) addStatus("CD: ON\n");
+    //if(port.getSignals.ringIndicator) addStatus("RI: ON\n");
+
+    //シリアル受信
+    await recvSerial();
+
+    //シリアルポートクローズ
+    await port.close();
+    addStatus("Close Serial port.\n");
+    openFlag = false;
+}
+
+//テキストエリア 受信データ書き込み
+function addRecive(msg) {
+    var textarea = document.getElementById('reciveArea');
+    textarea.value += msg;
+    textarea.scrollTop = textarea.scrollHeight;  //最下行表示
+}
+
+//テキストエリア ステータス書き込み
+function addStatus(msg) {
+    var statusText = document.getElementById('statusArea');
+    statusText.value += msg;
+    statusText.scrollTop = statusText.scrollHeight;  //最下行表示
+}
+
+//16進数文字列→バイト配列へ変換（16進数でない文字は無視）
+function parseHexString(str) { 
+  var result = [];
+  var byteStr = "";
+  for(var i = 0; i < str.length; i++) {
+    if((str[i] >= "0" && str[i] <= "9") || (str[i].toUpperCase() >= "A" && str[i].toUpperCase() <= "F")) {
+      byteStr += str[i];
+    } else {
+      if(byteStr.length > 0) byteStr += " ";
+    }
+    if(byteStr.length == 2) {
+        result.push(parseInt(byteStr, 16));
+        byteStr = "";
+    }
+  }
+  if(byteStr.length > 0) result.push(parseInt(byteStr, 16));
+  return result;
+}
+
+//バイト配列→16進数文字列へ変換
+function createHexString(ary) {
+  var result = "";
+  for(var i = 0; i < ary.length; i++) {
+    var str = "0" + ary[i].toString(16);
+    result += str.substr(str.length - 2, 2) + " ";
+  }
+  return result.substr(0, result.length - 1);
+}
+
+//シリアル送信
+async function sendSerial() {
+    var dataAry = [];
+    if(document.getElementById('encodeSelect').value == "shift-jis") {
+      dataAry = sjisEncode(document.getElementById('sendInput').value);  //SJIS
+    } else {
+      const encoder = new TextEncoder();
+      dataAry = encoder.encode(document.getElementById('sendInput').value);  //UTF-8
+    }
+    headAry = parseHexString(document.getElementById('sendHeaderSelect').value);
+    footAry = parseHexString(document.getElementById('sendTerminaterSelect').value);
+    var byteAry =  new Uint8Array([...headAry, ...dataAry, ...footAry]);
+    const writer = port.writable.getWriter();  //ライタの取得・ロック
+    await writer.write(byteAry);  //送信
+    writer.releaseLock();  //ライタの解放
+    addStatus("Send: " + createHexString(byteAry) + "\n");
+    add_sendInput_list();
+    //document.getElementById('sendInput').value = "";  //送信済みテキスト消去
+}
+
+//シリアル送信 バイト文字
+async function sendByteSerial() {
+    var byteStr = parseHexString(document.getElementById('sendByteInput').value)
+    var byteAry =  new Uint8Array(byteStr);
+    const writer = port.writable.getWriter();  //ライタの取得・ロック
+    await writer.write(byteAry);  //送信
+    writer.releaseLock();  //ライタの解放
+    addStatus("Send: " + createHexString(byteAry) + "\n");
+    add_sendByteInput_list()
+    //document.getElementById('sendByteInput').value = "";  //送信済みテキスト消去
+}
+
+//ボタン押下 ポートクローズ
+function closeButtonClick() {
+    if (!openFlag) return;
+    try {
+        reader.cancel();  //readerをcancel
+        openFlag = false;
+    } catch (e) {
+        addStatus(e + "\n");
+    }
+}
+
+//ボタン押下 受信データdownload
+function downloadClick() {
+    const output = document.querySelector('#reciveArea').value;  //downlooadデータ
+    if (output != "") {
+        const blob = new Blob([output], { type: "text/plain"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "ReciveData.txt";  //ファイル名
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+}
+
+//送信データをリストへ追加
+function add_sendInput_list() {
+  const input = document.getElementById('sendInput');
+  const datalist = document.getElementById('sendInput-list');
+  const newValue = input.value.trim();
+  if (newValue === "") return;
+
+  // リストに無ければ追加
+  const options = Array.from(datalist.options).map(opt => opt.value);
+  if (!options.includes(newValue)) {
+    const newOption = document.createElement('option');
+    newOption.value = newValue;
+    datalist.appendChild(newOption);
+  }
+}
+
+function add_sendByteInput_list() {
+  const input = document.getElementById('sendByteInput');
+  const datalist = document.getElementById('sendByteInput-list');
+  const newValue = input.value.trim();
+  if (newValue === "") return;
+
+  // リストに無ければ追加
+  const options = Array.from(datalist.options).map(opt => opt.value);
+  if (!options.includes(newValue)) {
+    const newOption = document.createElement('option');
+    newOption.value = newValue;
+    datalist.appendChild(newOption);
+  }
+}
+
+</script>
+</head>
+
+<body>
+    <h1>AP-0820 USB TEST <font size="-1">Ver 1.0</font></h1>
+    シリアル通信ポート
+    <button onclick="openButtonClick()">Open</button>
+    <button onclick="closeButtonClick()">Close</button>
+    Timeout(ms)
+    <select id="timeoutSelect">
+        <option value="0">0</option>
+        <option value="1">1</option>
+        <option value="5">5</option>
+        <option value="10" selected>10</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+        <option value="5000">5000</option>
+    </select>
+    ENC
+    <select id="encodeSelect">
+        <option value="utf-8" selected>UTF-8</option>
+        <option value="shift-jis">SJIS</option>
+    </select>
+    <p>
+        送信データ<br>
+        テキスト
+        <select id="sendHeaderSelect">
+            <option value="" selected></option>
+            <option value="01">SOH</option>
+            <option value="02">STX</option>
+            <option value="1B">ESC</option>
+        </select>
+        <input type="text" size="35" id="sendInput" list="sendInput-list">
+        <datalist id="sendInput-list">
+        </datalist>
+        <select id="sendTerminaterSelect">
+            <option value=""></option>
+            <option value="0D" selected>CR</option>
+            <option value="0A">LF</option>
+            <option value="0D,0A">CRLF</option>
+            <option value="03">ETX</option>
+            <option value="04">EOX</option>
+        </select>
+        <input type="button" value="Send" onclick="sendSerial()">
+        <br>
+        バイト列
+        <input type="text" size="48" id="sendByteInput" list="sendByteInput-list">
+        <datalist id="sendByteInput-list">
+        </datalist>
+        <input type="button" value="SendByte" onclick="sendByteSerial()">
+    </p>
+    <p>
+        受信データ<br>
+        <textarea cols="62" rows="10" id="reciveArea" style="width: 100%; resize: vertical;"></textarea>
+        <br>
+        <button onclick="downloadClick()">Download</button>
+    </p>
+    <p>
+        送受信ログ<br>
+        <textarea cols="62" rows="5" id="statusArea" style="width: 100%; resize: vertical;" readonly></textarea>
+    </p>
+</body>
+
+</html>

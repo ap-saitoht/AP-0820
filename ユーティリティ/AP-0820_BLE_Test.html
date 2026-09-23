@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AP-0820 BLE TEST</title>
+<script>
+/*
+===============================================================================
+Web Bluetooth API Wrapper Library
+===============================================================================
+*/
+//--------------------------------------------------
+//BlueJelly constructor
+//--------------------------------------------------
+var BlueJelly = function(){
+  this.bluetoothDevice = null;
+  this.dataCharacteristic = null;
+  this.hashUUID ={};
+  this.hashUUID_lastConnected;
+
+  //callBack
+  this.onScan = function(deviceName){console.log("onScan");};
+  this.onConnectGATT = function(uuid){console.log("onConnectGATT");};
+  this.onRead = function(data, uuid){console.log("onRead");};
+  this.onWrite = function(uuid){console.log("onWrite");};
+  this.onStartNotify = function(uuid){console.log("onStartNotify");};
+  this.onStopNotify = function(uuid){console.log("onStopNotify");};
+  this.onDisconnect = function(){console.log("onDisconnect");};
+  this.onClear = function(){console.log("onClear");};
+  this.onReset = function(){console.log("onReset");};
+  this.onError = function(error){console.log("onError");};
+}
+
+
+//--------------------------------------------------
+//setUUID
+//--------------------------------------------------
+BlueJelly.prototype.setUUID = function(name, serviceUUID, characteristicUUID){
+  console.log('Execute : setUUID');
+  console.log(this.hashUUID);
+
+  this.hashUUID[name] = {'serviceUUID':serviceUUID, 'characteristicUUID':characteristicUUID};
+}
+
+
+//--------------------------------------------------
+//scan
+//--------------------------------------------------
+BlueJelly.prototype.scan = function(uuid){
+  return (this.bluetoothDevice ? Promise.resolve() : this.requestDevice(uuid))
+  .catch(error => {
+    console.log('Error : ' + error);
+    this.onError(error);
+  });
+}
+
+
+//--------------------------------------------------
+//requestDevice
+//--------------------------------------------------
+BlueJelly.prototype.requestDevice = function(uuid) {
+  console.log('Execute : requestDevice');
+  return navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [this.hashUUID[uuid].serviceUUID]})
+  .then(device => {
+    this.bluetoothDevice = device;
+    this.bluetoothDevice.addEventListener('gattserverdisconnected', this.onDisconnect);
+    this.onScan(this.bluetoothDevice.name);
+  });
+}
+
+
+//--------------------------------------------------
+//connectGATT
+//--------------------------------------------------
+BlueJelly.prototype.connectGATT = function(uuid) {
+  if(!this.bluetoothDevice)
+  {
+    var error = "No Bluetooth Device";
+    console.log('Error : ' + error);
+    this.onError(error);
+    return;
+  }
+  if (this.bluetoothDevice.gatt.connected && this.dataCharacteristic) {
+    if(this.hashUUID_lastConnected == uuid)
+      return Promise.resolve();
+  }
+  this.hashUUID_lastConnected = uuid;
+
+  console.log('Execute : connect');
+  return this.bluetoothDevice.gatt.connect()
+  .then(server => {
+    console.log('Execute : getPrimaryService');
+    return server.getPrimaryService(this.hashUUID[uuid].serviceUUID);
+  })
+  .then(service => {
+    console.log('Execute : getCharacteristic');
+    return service.getCharacteristic(this.hashUUID[uuid].characteristicUUID);
+  })
+  .then(characteristic => {
+    this.dataCharacteristic = characteristic;
+    this.dataCharacteristic.addEventListener('characteristicvaluechanged',this.dataChanged(this, uuid));
+    this.onConnectGATT(uuid);
+  })
+  .catch(error => {
+      console.log('Error : ' + error);
+      this.onError(error);
+    });
+}
+
+
+//--------------------------------------------------
+//dataChanged
+//--------------------------------------------------
+BlueJelly.prototype.dataChanged = function(self, uuid) {
+  return function(event) {
+    self.onRead(event.target.value, uuid);
+  }
+}
+
+
+//--------------------------------------------------
+//read
+//--------------------------------------------------
+BlueJelly.prototype.read= function(uuid) {
+  return (this.scan(uuid))
+  .then( () => {
+    return this.connectGATT(uuid);
+  })
+  .then( () => {
+    console.log('Execute : readValue');
+    return this.dataCharacteristic.readValue();
+  })
+  .catch(error => {
+    console.log('Error : ' + error);
+    this.onError(error);
+  });
+}
+
+
+//--------------------------------------------------
+//write
+//--------------------------------------------------
+BlueJelly.prototype.write = function(uuid, array_value) {
+  return (this.scan(uuid))
+  .then( () => {
+    return this.connectGATT(uuid);
+  })
+  .then( () => {
+    //書き込み応答なし
+    //console.log('Execute : writeValue');
+    //var data = Uint8Array.from(array_value);
+    //return this.dataCharacteristic.writeValue(data);
+
+    //書き込み応答あり
+    console.log('Execute : writeValueWithResponse');
+    var data = Uint8Array.from(array_value);
+    return this.dataCharacteristic.writeValueWithResponse(data);
+  })
+  .then( () => {
+    this.onWrite(uuid);
+  })
+  .catch(error => {
+    console.log('Error : ' + error);
+    this.onError(error);
+  });
+}
+
+//--------------------------------------------------
+//write (書き込み応答有)
+//--------------------------------------------------
+BlueJelly.prototype.write = function(uuid, array_value) {
+  return (this.scan(uuid))
+  .then( () => {
+    return this.connectGATT(uuid);
+  })
+  .then( () => {
+    console.log('Execute : writeValueWithResponse');
+    var data = Uint8Array.from(array_value); // 補足: グローバル汚染を防ぐため var/let を推奨
+    
+    // writeValue から writeValueWithResponse に変更
+    return this.dataCharacteristic.writeValueWithResponse(data);
+  })
+  .then( () => {
+    this.onWrite(uuid);
+  })
+  .catch(error => {
+    console.log('Error : ' + error);
+    this.onError(error);
+  });
+}
+
+//--------------------------------------------------
+//startNotify
+//--------------------------------------------------
+BlueJelly.prototype.startNotify = function(uuid) {
+  return (this.scan(uuid))
+  .then( () => {
+    return this.connectGATT(uuid);
+  })
+  .then( () => {
+    console.log('Execute : startNotifications');
+    this.dataCharacteristic.startNotifications()
+  })
+  .then( () => {
+    this.onStartNotify(uuid);
+  })
+  .catch(error => {
+    console.log('Error : ' + error);
+    this.onError(error);
+  });
+}
+
+
+//--------------------------------------------------
+//stopNotify
+//--------------------------------------------------
+BlueJelly.prototype.stopNotify = function(uuid){
+  return (this.scan(uuid))
+  .then( () => {
+    return this.connectGATT(uuid);
+  })
+  .then( () => {
+  console.log('Execute : stopNotifications');
+  this.dataCharacteristic.stopNotifications()
+})
+  .then( () => {
+    this.onStopNotify(uuid);
+  })
+  .catch(error => {
+    console.log('Error : ' + error);
+    this.onError(error);
+  });
+}
+
+
+//--------------------------------------------------
+//disconnect
+//--------------------------------------------------
+BlueJelly.prototype.disconnect= function() {
+  if (!this.bluetoothDevice) {
+    var error = "No Bluetooth Device";
+    console.log('Error : ' + error);
+    this.onError(error);
+    return;
+  }
+
+  if (this.bluetoothDevice.gatt.connected) {
+    console.log('Execute : disconnect');
+    this.bluetoothDevice.gatt.disconnect();
+  } else {
+   var error = "Bluetooth Device is already disconnected";
+   console.log('Error : ' + error);
+   this.onError(error);
+   return;
+  }
+}
+
+
+//--------------------------------------------------
+//clear
+//--------------------------------------------------
+BlueJelly.prototype.clear= function() {
+   console.log('Excute : Clear Device and Characteristic');
+   this.bluetoothDevice = null;
+   this.dataCharacteristic = null;
+   this.onClear();
+}
+
+
+//--------------------------------------------------
+//reset(disconnect & clear)
+//--------------------------------------------------
+BlueJelly.prototype.reset= function() {
+  console.log('Excute : reset');
+  this.disconnect(); //disconnect() is not Promise Object
+  this.clear();
+  this.onReset();
+}
+</script>
+</head>
+
+<body>
+<!--
+===============================================================================
+  HTML表示
+===============================================================================
+-->
+<p><font size="+2">AP-0820 BLE TEST</font>&nbsp;&nbsp;Ver 1.4</p>
+SERVICE_UUID&nbsp;<input id="service_uuid" size="34" value="6e400001-b5a3-f393-e0a9-e50e24dcca9e"><br>
+CHARACTERISTIC_RX_UUID&nbsp;<input id="characteristic_rx_uuid" size="34" value="6e400003-b5a3-f393-e0a9-e50e24dcca9e"><br>
+CHARACTERISTIC_TX_UUID&nbsp;<input id="characteristic_tx_uuid" size="34" value="6e400002-b5a3-f393-e0a9-e50e24dcca9e"><br>
+
+<button id="startNotifications">Connect & Start</button>
+<button id="disconnect">Disconnect</button>
+<button id="reset">Reset</button>
+<hr>
+Text
+<input list="write_text_list" id="write_text" size="30">
+<datalist id="write_text_list">
+  <option value="I">
+  <option value="F">
+  <option value="FU">
+  <option value="A">
+</datalist>
+&nbsp;Terminat
+<select id="terminat">
+  <option value="CR">CR</option>
+  <option value="LF">LF</option>
+  <option value="None">None</option>
+</select>
+<button id="write">Write</button>
+<br>
+Byte(01 A2 F3 ･･･)<br>
+<input list="write_byte_list" id="write_byte" size="50">
+<datalist id="write_byte_list">
+</datalist>
+<button id="write_b">Write</button>
+<br>
+Repeat(Cmd1,Cmd2,･･･)<br>
+<input id="command_text" size="50">
+<button id="command_start">Start</button>
+<button id="command_stop">Stop</button>
+<br>
+Interval(ms)
+<input  type="number" id="interval" min="1" max="99999999" value="1000">
+<hr>
+<div id="device_name"></div>
+<div id="status"></div>
+<hr>
+<textarea cols="70" rows="10" id="logTextarea"></textarea>
+<br>
+<input type="checkbox" id="addBytes">Add Bytes
+&nbsp;&nbsp;<button id="save">Save</button>
+<br><br>
+画像取得
+<button onclick="getimg1()">1/1</button>
+<button onclick="getimg4()">1/4</button>
+<button onclick="getimg16()">1/16</button>
+<button onclick="getimgCancel()">Cancel</button>
+<br>
+<canvas id="canvas"></canvas>
+
+<script>
+//--------------------------------------------------
+// メインスクリプト
+//--------------------------------------------------
+const RX_UUID_NAME = 'bleDevice_RX';  //任意の名称
+const TX_UUID_NAME = 'bleDevice_TX';  //任意の名称
+let serviceUuid = document.getElementById('service_uuid').value;
+let characteristicRxUuid = document.getElementById('characteristic_rx_uuid').value;
+let characteristicTxUuid = document.getElementById('characteristic_tx_uuid').value;
+
+let terminatChr = '\r';  //write終端文字
+let commandAry = [];  //コマンド配列
+let commandIndex = 0;  //コマンド配列インデックス
+let recvBytes = [];  //受信データ（バイト配列）
+let getImgFlag = false;  //画像取得中フラグ
+
+//BlueJellyのインスタンス生成
+let ble = new BlueJelly();
+
+let responseFlag = false;  //コマンドタイマー用 ステータス応答フラグ
+
+//タイマー処理
+let timerInterval = document.getElementById('interval').value;  //タイマー間隔 ms
+let timeoutID;  //タイムアウトID
+function timerTask() {
+  if(responseFlag && commandAry.length > 0) {
+    responseFlag = false;
+    var byteAry = new TextEncoder().encode(commandAry[commandIndex] + terminatChr);  //エンコード バイト 終端文字追加
+    ble.write(TX_UUID_NAME, byteAry);  //write
+    if(document.getElementById('addBytes').checked) {
+      addLog(commandAry[commandIndex] + ":" + createHexString(byteAry));
+    } else {
+      addLog(commandAry[commandIndex]);
+    }
+    // dispStatus("Command[" + commandIndex + "]=" + commandAry[commandIndex]);
+    commandIndex++;
+    if(commandIndex >= commandAry.length) {
+      commandIndex = 0;
+    }
+  } 
+  timeoutID = setTimeout(timerTask, timerInterval);  //タイムアウト設定
+}
+
+//ステータスエリア出力
+function dispStatus(str) {
+  const now = new Date();  //現在日時
+  document.getElementById('status').innerHTML = "[" + now.toLocaleString() +"] " + str;
+}
+
+//ログテキストエリア出力
+function addLog(str) {
+  var log = document.getElementById('logTextarea');
+  const now = new Date();  //現在日時
+  log.value += "[" + now.toLocaleString() +"] " + str + "\r\n";
+  log.scrollTop = log.scrollHeight;  //最下行表示
+}
+
+//ページのロード時処理
+window.onload = function() {
+  document.getElementById('device_name').innerHTML = "No Device";
+  //UUIDの設定
+  ble.setUUID(RX_UUID_NAME, serviceUuid, characteristicRxUuid);
+  ble.setUUID(TX_UUID_NAME, serviceUuid, characteristicTxUuid);
+  // dispStatus(serviceUuid + "," + characteristicRxUuid + "," + characteristicTxUuid);
+}
+
+//UUIDが変更された時のイベント
+document.getElementById('service_uuid').onchange = function() {
+  serviceUuid = document.getElementById('service_uuid').value;
+  ble.setUUID(RX_UUID_NAME, serviceUuid, characteristicRxUuid);
+  ble.setUUID(TX_UUID_NAME, serviceUuid, characteristicTxUuid);
+}
+
+document.getElementById('characteristic_rx_uuid').onchange = function() {
+  characteristicRxUuid = document.getElementById('characteristic_rx_uuid').value;
+  ble.setUUID(RX_UUID_NAME, serviceUuid, characteristicRxUuid);
+}
+
+document.getElementById('characteristic_tx_uuid').onchange = function() {
+  characteristicTxUuid = document.getElementById('characteristic_tx_uuid').value;
+  ble.setUUID(TX_UUID_NAME, serviceUuid, characteristicTxUuid);
+}
+
+//ボタンが押された時のイベント
+document.getElementById('startNotifications').addEventListener('click', function() {
+  dispStatus("Starting notifications");
+  ble.startNotify(RX_UUID_NAME);
+});
+
+document.getElementById('write').addEventListener('click', function() {
+  var str = document.getElementById('write_text').value;
+  var byteAry = new TextEncoder().encode(str + terminatChr);  //エンコード バイト 終端文字追加
+  dispStatus("Writing data= " + str);
+  ble.write(TX_UUID_NAME, byteAry);  //write
+  if(document.getElementById('addBytes').checked) {
+    addLog(str + ":" + createHexString(byteAry));
+  } else {
+    addLog(str);
+  }
+  add_write_text_list();
+});
+
+document.getElementById('write_b').addEventListener('click', function() {
+  var str = document.getElementById('write_byte').value;
+  var byteAry = parseHexString(str);
+  //byteAry.push(terminatChr.charCodeAt(0));  //終端文字追加
+  dispStatus("Writing data= " + createHexString(byteAry));
+  ble.write(TX_UUID_NAME, byteAry);  //write
+  addLog(createHexString(byteAry));
+  add_write_byte_list();
+});
+
+document.getElementById('terminat').onchange = function() {
+  switch (this.value) {
+    case "CR":
+      terminatChr = "\r";
+      break;
+    case "LF":
+      terminatChr = "\n";
+      break;
+    default:
+      terminatChr = "";
+  }
+}
+
+//Intervalが変更された時のイベント
+document.getElementById('interval').onchange = function() {
+  timerInterval = document.getElementById('interval').value;
+}
+
+//Commandが変更された時のイベント
+document.getElementById('command_text').onchange = function() {
+  var str = document.getElementById('command_text').value;
+  if(str == "") {
+    commandAry = [];
+  } else {
+    commandAry = str.split(",");
+  }
+}
+
+document.getElementById('command_start').addEventListener('click', function() {
+  dispStatus("Starting command timer");
+  responseFlag = true;
+  commandIndex = 0;
+  timerTask();  //タイマー開始 ms
+});
+
+document.getElementById('command_stop').addEventListener('click', function() {
+  clearTimeout(timeoutID);  //タイマー停止
+  dispStatus("Stopped command timer");
+});
+
+document.getElementById('disconnect').addEventListener('click', function() {
+  dispStatus("Starting disconnect");
+  ble.disconnect();  //切断
+});
+
+document.getElementById('reset').addEventListener('click', function() {
+  dispStatus("Starting reset");
+  ble.reset(); //disconnectとclearの両方行う
+});
+
+document.getElementById('save').addEventListener('click', function() {
+  const output = document.querySelector('#logTextarea').value;  //downlooadデータ
+  if (output != "") {
+    const blob = new Blob([output], { type: "text/plain"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const now = new Date();  //現在日時
+    a.download = "Log" + now.toLocaleString() + ".txt";  //ファイル名
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    dispStatus("Saved Log text");
+  }
+});
+
+//Scan後の処理
+ble.onScan = function(deviceName) {
+  document.getElementById('device_name').innerHTML = deviceName;
+  dispStatus("Pairing complete");
+}
+
+//Connect後の処理
+ble.onConnectGATT = function (uuid) {
+  dispStatus("Connected");
+}
+
+//Notify開始後の処理
+ble.onStartNotify = function(uuid){
+  dispStatus("Notification Start");
+}
+
+//Notify終了後の処理
+ble.onStopNotify = function(uuid){
+  dispStatus("Notification Stop");
+}
+
+//16進数文字列→バイト配列へ変換（16進数でない文字は無視）
+function parseHexString(str) { 
+  var result = [];
+  var byteStr = "";
+  for(var i = 0; i < str.length; i++) {
+    if((str[i] >= "0" && str[i] <= "9") || (str[i].toUpperCase() >= "A" && str[i].toUpperCase() <= "F")) {
+      byteStr += str[i];
+    } else {
+      if(byteStr.length > 0) byteStr += " ";
+    }
+    if(byteStr.length == 2) {
+        result.push(parseInt(byteStr, 16));
+        byteStr = "";
+    }
+  }
+  if(byteStr.length > 0) result.push(parseInt(byteStr, 16));
+  return result;
+}
+
+//バイト配列→16進数文字列へ変換
+function createHexString(ary) {
+  var result = "";
+  for(var i = 0; i < ary.length; i++) {
+    var str = "0" + ary[i].toString(16);
+    result += str.substr(str.length - 2, 2) + " ";
+  }
+  return result.substr(0, result.length - 1);
+}
+
+//Read後の処理　Notifyを開始している場合は自動的に呼び出される
+ble.onRead = function(data, uuid) {
+  //デコード
+  var value = new TextDecoder().decode(data);  //デコード UTF-8
+  // var value = new TextDecoder('shift_jis').decode(data);  //デコード S-JIS
+  
+  //バイト配列で取得
+  for(let i = 0; i < data.byteLength; i++) {
+    recvBytes.push(data.getInt8(i));
+  }
+
+  if(getImgFlag) {  //画像取得かの確認
+    dispStatus("Getting image data(" + recvBytes.length + " byte)");
+    addLog("画像データ " + recvBytes.length + " byte");
+    //画像データ最後確認
+    if(recvBytes[recvBytes.length - 3] == 6 && recvBytes[recvBytes.length - 2] == 0x3b && recvBytes[recvBytes.length - 1] == 3) {
+      const bmpData = new Uint8Array(recvBytes);  //8ビット符号なし整数値のバイト配列に変換
+      displayGrayscaleBMP(bmpData);  //画像表示
+/*
+      //ファイル保存
+      const blob = new Blob([bmpData], { type: 'image/bmp' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "image.bmp";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url); // メモリ解放
+*/
+      addLog("画像取得完了");
+      recvBytes.length = 0;  //受信データクリア
+      getImgFlag = false;
+    }
+  } else {
+    if(value.charCodeAt(value.length - 1) == 13) {  //末尾がCRなら削除
+      value = value.substr(0, value.length - 1);
+    }
+    str = value + ": " + createHexString(recvBytes);
+    dispStatus("Readed data= " + str);
+    if(document.getElementById('addBytes').checked) {
+      addLog(str);
+    } else {
+      addLog(value);
+    }
+    recvBytes.length = 0;  //受信データクリア
+  }
+
+  responseFlag = true;
+}
+
+//Write後の処理
+ble.onWrite = function(uuid){
+  //dispStatus("Writenn");
+}
+
+//Disconnect後の処理
+ble.onDisconnect = function() {
+  dispStatus("Disconnected");
+}
+
+//Clear後の処理
+ble.onClear = function() {
+  document.getElementById('device_name').innerHTML = "No Device";
+  dispStatus("Cancel pairing settings");
+}
+
+//Reset後の処理
+ble.onReset = function() {
+  document.getElementById('device_name').innerHTML = "No Device";
+  dispStatus("Disconnected & Cancel pairing settings");
+}
+
+//エラー発生後の処理
+ble.onError = function(error){
+  dispStatus(error);
+}
+
+//画像取得ボタン
+function getimg16() {
+  getimg("G2");
+}
+
+function getimg4() {
+  getimg("G1");
+}
+
+function getimg1() {
+  getimg("G0");
+}
+
+function getimgCancel() {
+  addLog("画像取得キャンセル");
+  recvBytes.length = 0;  //受信データクリア
+  getImgFlag = false;
+}
+
+//画像取得
+function getimg(str) {
+  var byteAry = new TextEncoder().encode(str + terminatChr);
+  dispStatus("Writing data= " + str);
+  ble.write(TX_UUID_NAME, byteAry);  //write
+  if(document.getElementById('addBytes').checked) {
+    addLog(str + ":" + createHexString(byteAry));
+  } else {
+    addLog(str);
+  }
+  getImgFlag = true;
+}
+
+//8bitグレースケール画像表示
+function displayGrayscaleBMP(byteArray) {
+  const dataView = new DataView(byteArray.buffer);
+  // ヘッダーから幅、高さ、ピクセルデータの開始位置を取得
+  const width = dataView.getUint32(18, true);
+  const height = dataView.getUint32(22, true);
+  const dataOffset = dataView.getUint32(10, true);
+  // Canvas設定
+  const canvas = document.getElementById('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.createImageData(width, height);
+  // ピクセルデータをCanvasに適用
+  let pixelIndex = dataOffset;
+  for (let y = height - 1; y >= 0; y--) { // BMPは下から上に並ぶ
+    for (let x = 0; x < width; x++) {
+      const brightness = dataView.getUint8(pixelIndex++);
+      const canvasIndex = (y * width + x) * 4; // RGBAインデックス計算
+      imageData.data[canvasIndex] = brightness; // R
+      imageData.data[canvasIndex + 1] = brightness; // G
+      imageData.data[canvasIndex + 2] = brightness; // B
+      imageData.data[canvasIndex + 3] = 255; // Alpha
+    }
+    // 行のパディング処理
+    while (pixelIndex % 4 !== 0) pixelIndex++;
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+//--------------------------------------------------
+// コマンドをリストへ追加
+//--------------------------------------------------
+function add_write_text_list() {
+  const input = document.getElementById('write_text');
+  const datalist = document.getElementById('write_text_list');
+  const newValue = input.value.trim();
+  if (newValue === "") return;
+
+  // リストに無ければ追加
+  const options = Array.from(datalist.options).map(opt => opt.value);
+  if (!options.includes(newValue)) {
+    const newOption = document.createElement('option');
+    newOption.value = newValue;
+    datalist.appendChild(newOption);
+  }
+}
+
+function add_write_byte_list() {
+  const input = document.getElementById('write_byte');
+  const datalist = document.getElementById('write_byte_list');
+  const newValue = input.value.trim();
+  if (newValue === "") return;
+
+  // リストに無ければ追加
+  const options = Array.from(datalist.options).map(opt => opt.value);
+  if (!options.includes(newValue)) {
+    const newOption = document.createElement('option');
+    newOption.value = newValue;
+    datalist.appendChild(newOption);
+  }
+}
+</script>
+
+</body>
+</html>

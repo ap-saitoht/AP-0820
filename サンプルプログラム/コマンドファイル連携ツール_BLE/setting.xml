@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<setup>
+	<!-- BLEデバイス名 -->
+	<devicename>AP-0820</devicename>
+
+	<!-- 連携フォルダパス -->
+	<folderpath>.\</folderpath>
+
+	<!-- ファイル監視時の待ち時間（ms） -->
+	<delay>20</delay>
+
+	<!-- コマンド リトライ回数 -->
+	<retry>5</retry>
+
+	<!-- エンコード／デコード（"utf-8"、"shift_jis"他） -->
+	<dataencdec>shift_jis</dataencdec>
+</setup>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<setup>
+	<!-- AP-0820接続先 -->
+	<ip>AP-0820.local</ip>
+	<port>9004</port>
+
+	<!-- 出力ファイルパス -->
+	<filepath>output.txt</filepath>
+
+	<!-- 読み取りコマンド -->
+	<readcmd>A</readcmd>
+
+	<!-- 読み取り間隔（s） -->
+	<interval>0.5</interval>
+
+	<!-- 接続応答間隔（s）0:確認しない -->
+	<connectChk>5</connectChk>
+
+	<!-- 読み取りデータ デコード（"utf-8"、"shift_jis"他） -->
+	<datadec>shift_jis</datadec>
+
+	<!-- 処理終了データ -->
+	<enddata>99999999</enddata>
+</setup>

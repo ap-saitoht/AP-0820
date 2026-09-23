@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <!--フォーム表示設定-->
+  <formtitle>CsvViewer</formtitle>
+  <formsize>550, 400</formsize>
+
+  <!--ファイルリスト 複数指定可能-->
+  <filepath>test1.csv</filepath>
+  <filepath>..\..\サンプルプログラム\読取ファイル出力_BLE\output.txt</filepath>
+
+  <!--CSVファイルの区切り文字-->
+  <separation>,</separation>
+
+  <!--文字エンコード-->
+  <encoding>Default</encoding>
+
+  <!--ヘッダ有-->
+  <header>false</header>
+
+  <!--データ表示 フォント-->
+  <datafont>ＭＳ ゴシック</datafont>
+  <fontsize>10</fontsize>
+
+  <!--CSVファイルの更新チェック間隔 ms-->
+  <interval>500</interval>
+</config>

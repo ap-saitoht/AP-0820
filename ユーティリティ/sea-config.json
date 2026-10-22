@@ -1,0 +1,5 @@
+{
+  "main": "WebSocket_ProxyServer.cjs",
+  "output": "WebSocket_ProxyServer.blob",
+  "disableExperimentalSEAWarning": true
+}

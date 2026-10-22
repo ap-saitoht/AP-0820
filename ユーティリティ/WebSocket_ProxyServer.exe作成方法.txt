@@ -1,0 +1,29 @@
+WebSocket_ProxyServer.jsをWindows上で実行できるように.exeファイルに変換する方法
+	Node.js公式機能（SEA: Single Executable Application）を使って、Node.jsがインストールされていない環境でも動作させることができます。
+
+●npmでモジュールをインストール
+npm i -D esbuild postject
+	esbuildはES modulesをCommonJS形式に変換するバンドラーで、postjectは.exeにBlobを注入するために使われます。
+
+●手順
+１．esbuildコマンドでES modulesからCommonJS形式に変換
+npx esbuild WebSocket_ProxyServer.js --outfile=WebSocket_ProxyServer.cjs --bundle --platform=node --format=cjs --minify
+
+２．Node.jsプログラムからBlobを生成するための設定ファイルを作成
+＜sea-config.json＞
+{
+  "main": "WebSocket_ProxyServer.cjs",
+  "output": "WebSocket_ProxyServer.blob",
+  "disableExperimentalSEAWarning": true
+}
+	disableExperimentalSEAWarningは.exeファイル実行の際の警告を非表示にしてくれます。
+
+３．コマンドを実行して、注入するBlobを生成
+node --experimental-sea-config sea-config.json
+
+４．Node.jsが含まれた.exeファイルを生成
+node -e "fs.copyFileSync(process.execPath, 'WebSocket_ProxyServer.exe')"
+
+５．exeファイルにBlobを注入
+npx postject WebSocket_ProxyServer.exe NODE_SEA_BLOB WebSocket_ProxyServer.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+

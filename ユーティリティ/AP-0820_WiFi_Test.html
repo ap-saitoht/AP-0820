@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AP-0820 WiFi TEST</title>
+    <script type="text/javascript">
+
+//SJISエンコード用テーブル作成
+const table = { '\u00a5': 0x5c, '\u203e': 0x7e, '\u301c': 0x8160 };
+const sjisDecoder = new TextDecoder('shift-jis');
+for (let i = 0x81; i <= 0xfc; i++) {
+   	if (i <= 0x84 || i >= 0x87 && i <= 0x9f || i >= 0xe0 && i <= 0xea || i >= 0xed && i <= 0xee || i >= 0xfa) {
+   		for (let j = 0x40; j <= 0xfc; j++) {
+   			const c = sjisDecoder.decode(new Uint8Array([i, j]));
+   			if (c.length === 1 && c !== '\ufffd' && !table[c]) {
+       			table[c] = i << 8 | j;
+   			}
+   		}
+  	}
+}
+
+//SJISエンコード処理
+function sjisEncode(content) {
+	let buffer = [];
+	for (let i = 0; i < content.length; i++) {
+   		const c = content.codePointAt(i);
+   		if (c > 0xffff) {
+   			i++;
+   		}
+   		if (c < 0x80) {
+   			buffer.push(c);
+   		} else if (c >= 0xff61 && c <= 0xff9f) {
+   			buffer.push(c - 0xfec0);
+   		} else {
+   			const d = table[String.fromCodePoint(c)] || 0x3f;
+   			if (d > 0xff) {
+       			buffer.push(d >> 8 & 0xff, d & 0xff);
+   			} else {
+       			buffer.push(d);
+   			}
+   		}
+	}
+	return Uint8Array.from(buffer);
+}
+
+let connectFlag = false;
+let wSck = null;
+
+// 接続ボタン押下
+function connectBtnClick() {
+    if (connectFlag) return; 
+
+    const serverIp = document.getElementById('serverIp').value;
+    const serverPort = document.getElementById('serverPort').value;
+    const ap0820Ip = document.getElementById('ap0820Ip').value;
+    const ap0820Port = document.getElementById('ap0820Port').value;
+    wSck = new WebSocket(`ws://${serverIp}:${serverPort}/?host=${ap0820Ip}&port=${ap0820Port}`);  //中継プロキシサーバーへ接続
+
+    wSck.binaryType = 'arraybuffer';
+
+	//ソケット接続時イベント
+	wSck.onopen = function(e) {
+        addStatus("接続しました。\n");
+        connectFlag = true;
+	};
+
+	//エラー発生時のイベント
+    wSck.onerror = function(error) {
+        addStatus("接続に失敗または、通信エラーが発生しました。（" + error.data + "）\n");
+	};
+
+	//通信が切断された際のイベント
+	wSck.onclose = function() {
+	    addStatus("切断されました。\n");
+        connectFlag = false;
+        wSck = null;
+	};
+
+    //データを受信したときのイベント
+	wSck.onmessage = function(e) {
+        const rawBytes = new Uint8Array(e.data);
+	    const textDecoder = new TextDecoder(document.getElementById('encodeSelect').value);
+		const str = textDecoder.decode(rawBytes);
+        addRecive(str);
+        addStatus("Recv: " + Array.from(rawBytes).map(b => b.toString(16).padStart(2, '0')).join(' ') + "\n");
+	};
+}
+
+//テキストエリア 受信データ書き込み
+function addRecive(msg) {
+    var textarea = document.getElementById('reciveArea');
+    textarea.value += msg;
+    textarea.scrollTop = textarea.scrollHeight;  //最下行表示
+}
+
+//テキストエリア ステータス書き込み
+function addStatus(msg) {
+    var statusText = document.getElementById('statusArea');
+    statusText.value += msg;
+    statusText.scrollTop = statusText.scrollHeight;  //最下行表示
+}
+
+//16進数文字列→バイト配列へ変換（16進数でない文字は無視）
+function parseHexString(str) { 
+  var result = [];
+  var byteStr = "";
+  for(var i = 0; i < str.length; i++) {
+    if((str[i] >= "0" && str[i] <= "9") || (str[i].toUpperCase() >= "A" && str[i].toUpperCase() <= "F")) {
+      byteStr += str[i];
+    } else {
+      if(byteStr.length > 0) byteStr += " ";
+    }
+    if(byteStr.length == 2) {
+        result.push(parseInt(byteStr, 16));
+        byteStr = "";
+    }
+  }
+  if(byteStr.length > 0) result.push(parseInt(byteStr, 16));
+  return result;
+}
+
+//文字列データ送信
+function sendText() {
+    if (!connectFlag || !wSck) return;
+    var dataAry = [];
+    if(document.getElementById('encodeSelect').value == "shift-jis") {
+      dataAry = sjisEncode(document.getElementById('sendInput').value);  //SJIS
+    } else {
+      const encoder = new TextEncoder();
+      dataAry = encoder.encode(document.getElementById('sendInput').value);  //UTF-8
+    }
+    headAry = parseHexString(document.getElementById('sendHeaderSelect').value);
+    footAry = parseHexString(document.getElementById('sendTerminaterSelect').value);
+    var byteAry =  new Uint8Array([...headAry, ...dataAry, ...footAry]);
+
+    wSck.send(byteAry);  //データ送信
+
+	addStatus("Send: " + Array.from(dataAry).map(b => b.toString(16).padStart(2, '0')).join(' ') + " [" + document.getElementById('sendInput').value + "]" + "\n");
+    add_sendInput_list();
+    //document.getElementById('sendInput').value = "";  //送信済みテキスト消去
+}
+
+//バイト列データ送信
+function sendBytes() {
+    if (!connectFlag || !wSck) return;
+    var byteStr = parseHexString(document.getElementById('sendByteInput').value)
+    var byteAry =  new Uint8Array(byteStr);
+
+    wSck.send(byteAry);  //データ送信
+
+	addStatus("Send: " + Array.from(byteAry).map(b => b.toString(16).padStart(2, '0')).join(' ') + "\n");
+    add_sendByteInput_list()
+    //document.getElementById('sendByteInput').value = "";  //送信済みテキスト消去
+}
+
+//切断ボタン押下
+function disconnectBtnClick() {
+    if (!connectFlag || !wSck) return;
+    connectFlag = false;
+    wSck.close();
+}
+
+//受信データdownloadボタン押下 
+function downloadClick() {
+    const output = document.querySelector('#reciveArea').value;  //downlooadデータ
+    if (output != "") {
+        const blob = new Blob([output], { type: "text/plain"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "ReciveData.txt";  //ファイル名
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+}
+
+//送信データをリストへ追加
+function add_sendInput_list() {
+  const input = document.getElementById('sendInput');
+  const datalist = document.getElementById('sendInput-list');
+  const newValue = input.value.trim();
+  if (newValue === "") return;
+
+  // リストに無ければ追加
+  const options = Array.from(datalist.options).map(opt => opt.value);
+  if (!options.includes(newValue)) {
+    const newOption = document.createElement('option');
+    newOption.value = newValue;
+    datalist.appendChild(newOption);
+  }
+}
+
+function add_sendByteInput_list() {
+  const input = document.getElementById('sendByteInput');
+  const datalist = document.getElementById('sendByteInput-list');
+  const newValue = input.value.trim();
+  if (newValue === "") return;
+
+  // リストに無ければ追加
+  const options = Array.from(datalist.options).map(opt => opt.value);
+  if (!options.includes(newValue)) {
+    const newOption = document.createElement('option');
+    newOption.value = newValue;
+    datalist.appendChild(newOption);
+  }
+}
+
+</script>
+</head>
+
+<body>
+    <h1>AP-0820 WiFi TEST <font size="-1">Ver 1.0</font></h1>
+    中継サーバー接続先　
+    IPアドレス<input type="text" size="20" id="serverIp" value="localhost">
+    ポート<input type="text" size="7" id="serverPort" value="8080">
+    <br>
+    AP-0820接続先　
+    IPアドレス<input type="text" size="20" id="ap0820Ip" value="AP-0820">
+    ポート<input type="text" size="7" id="ap0820Port" value="9004">
+    <br>
+    ENC
+    <select id="encodeSelect">
+        <option value="utf-8" selected>UTF-8</option>
+        <option value="shift-jis">SJIS</option>
+    </select>
+    　
+    <button onclick="connectBtnClick()">接続</button>
+    <button onclick="disconnectBtnClick()">切断</button>
+    <p>
+        送信データ<br>
+        テキスト
+        <select id="sendHeaderSelect">
+            <option value="" selected></option>
+            <option value="01">SOH</option>
+            <option value="02">STX</option>
+            <option value="1B">ESC</option>
+        </select>
+        <input type="text" size="35" id="sendInput" list="sendInput-list">
+        <datalist id="sendInput-list">
+        </datalist>
+        <select id="sendTerminaterSelect">
+            <option value=""></option>
+            <option value="0D" selected>CR</option>
+            <option value="0A">LF</option>
+            <option value="0D,0A">CRLF</option>
+            <option value="03">ETX</option>
+            <option value="04">EOX</option>
+        </select>
+        <input type="button" value="Send" onclick="sendText()">
+        <br>
+        バイト列
+        <input type="text" size="48" id="sendByteInput" list="sendByteInput-list">
+        <datalist id="sendByteInput-list">
+        </datalist>
+        <input type="button" value="SendBytes" onclick="sendBytes()">
+    </p>
+    <p>
+        受信データ<br>
+        <textarea cols="62" rows="10" id="reciveArea" style="width: 100%; resize: vertical;"></textarea>
+        <br>
+        <button onclick="downloadClick()">Download</button>
+    </p>
+    <p>
+        送受信ログ<br>
+        <textarea cols="62" rows="5" id="statusArea" style="width: 100%; resize: vertical;" readonly></textarea>
+    </p>
+</body>
+
+</html>

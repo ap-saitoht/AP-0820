@@ -1,0 +1,5 @@
+{
+  "websocketHost": "localhost",
+  "websocketPort": 8080,
+  "exitOnDisconnect": false
+}
